@@ -32,26 +32,41 @@ collection = db["final_links"]
 # Telegram Bot
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Selenium Setup
+# SOCKS5 Proxy Config
+SOCKS5_PROXY = "socks5h://115.127.124.234:1080"
+
+# Requests with Proxy
+PROXIES = {
+    "http": SOCKS5_PROXY,
+    "https": SOCKS5_PROXY
+}
+
+# Selenium Setup with Proxy
 def setup_chromedriver():
     chromedriver_autoinstaller.install()
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+
+    # Set SOCKS5 Proxy for Selenium
+    options.add_argument(f"--proxy-server={SOCKS5_PROXY.replace('socks5h://', 'socks5://')}")
+
     return webdriver.Chrome(options=options)
 
 # Extract HubDrive links
 def extract_hubdrive_links(post_url):
     session = requests.Session()
+    session.proxies.update(PROXIES)
     session.headers.update({"User-Agent": "Mozilla/5.0"})
+
     response = session.get(post_url)
     if response.status_code != 200:
         return []
-    
+
     soup = BeautifulSoup(response.text, "html.parser")
     hubdrive_links = [a["href"] for a in soup.select('a[href*="howblogs.xyz"]')]
-    
+
     extracted_links = []
     for link in hubdrive_links:
         nsoup = BeautifulSoup(session.get(link).text, "html.parser")
@@ -59,7 +74,7 @@ def extract_hubdrive_links(post_url):
         for a in atag:
             if "hubdrive.dad" in a["href"]:
                 extracted_links.append(a["href"])
-    
+
     return extracted_links
 
 # Bypass HubDrive using Selenium
@@ -97,6 +112,7 @@ async def bypass_hubdrive(hubdrive_url):
 # Process SkyMoviesHD Category
 def process_category(category_url):
     session = requests.Session()
+    session.proxies.update(PROXIES)
     response = session.get(category_url)
     if response.status_code != 200:
         print("Failed to fetch category page.")
@@ -134,11 +150,11 @@ async def send_links():
 # Run Everything
 if __name__ == "__main__":
     category_url = "https://skymovieshd.video/index.php?dir=All-Web-Series&sort=all"
-    
+
     # Start scraping
     print("Scraping SkyMoviesHD...")
     process_category(category_url)
-    
+
     # Start Telegram bot
     print("Starting Telegram bot...")
     asyncio.run(send_links())
