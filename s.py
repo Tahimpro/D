@@ -2,10 +2,9 @@ import logging
 import time
 import threading
 import requests
+import undetected_chromedriver as uc
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
@@ -13,8 +12,8 @@ from pyrogram.types import Message
 API_ID = 16531092
 API_HASH = "b073b97bd4c8c56616fc2cbbd4da845a"
 BOT_TOKEN = "7524524705:AAH7aBrV5cAZNRFIx3ZZhO72kbi4tjNd8lI"
-CHANNEL_ID = "-1002340139937"  # Private channel ID
-ADMIN_IDS = [2142536515]  # Only these users can use commands
+CHANNEL_ID = "-1002340139937"  # Private channel where links are sent
+ADMIN_IDS = [2142536515]  # Only admins can use commands
 
 # MongoDB Config
 MONGO_URI = "mongodb+srv://FF:FF@cluster0.ryymb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
@@ -29,12 +28,11 @@ mongo_client = MongoClient(MONGO_URI)
 db = mongo_client[DB_NAME]
 collection = db[COLLECTION_NAME]
 
-# Selenium Setup for HubDrive Bypassing
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-driver = webdriver.Chrome(options=chrome_options)
+# Initialize Selenium with undetected-chromedriver
+def init_driver():
+    return uc.Chrome(headless=True, use_subprocess=True)
+
+driver = init_driver()
 
 # Pyrogram Bot Initialization
 bot = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
