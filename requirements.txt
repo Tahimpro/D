@@ -1,4 +1,5 @@
 git+https://github.com/xkunal01/pyrofork-old
+tgcrypto 
 requests
 beautifulsoup4
 pymongo
