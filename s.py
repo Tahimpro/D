@@ -1,215 +1,174 @@
-import os
-import requests
-import asyncio
 import logging
-import random
+import time
 import threading
-import concurrent.futures
-from flask import Flask
+import requests
+from bs4 import BeautifulSoup
 from pymongo import MongoClient
 from selenium import webdriver
-import chromedriver_autoinstaller
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, CallbackContext
+from selenium.webdriver.chrome.options import Options
+from pyrogram import Client, filters
+from pyrogram.types import Message
 
-# ========== CONFIGURATION ==========
-API_HASH = "b073b97bd4c8c56616fc2cbbd4da845a"
+# Telegram Bot Config
 API_ID = 16531092
+API_HASH = "b073b97bd4c8c56616fc2cbbd4da845a"
 BOT_TOKEN = "7524524705:AAH7aBrV5cAZNRFIx3ZZhO72kbi4tjNd8lI"
-CHANNEL_ID = "-1002340139937"
-ADMIN_IDS = [2142536515]
+CHANNEL_ID = "-1002340139937"  # Private channel ID
+ADMIN_IDS = [2142536515]  # Only these users can use commands
+
+# MongoDB Config
 MONGO_URI = "mongodb+srv://FF:FF@cluster0.ryymb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+DB_NAME = "MovieBot"
+COLLECTION_NAME = "Links"
 
-IS_RUNNING = False
-CATEGORY_URL = None  # No default category, must be set via command
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 
-# ========== DATABASE ==========
-try:
-    client = MongoClient(MONGO_URI)
-    db = client["movie_bot"]
-    collection = db["download_links"]
-    print("✅ Connected to MongoDB")
-except Exception as e:
-    print(f"❌ MongoDB Connection Error: {e}")
+# MongoDB Connection
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client[DB_NAME]
+collection = db[COLLECTION_NAME]
 
-# ========== TELEGRAM BOT ==========
-bot = Bot(token=BOT_TOKEN)
+# Selenium Setup for HubDrive Bypassing
+chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+driver = webdriver.Chrome(options=chrome_options)
 
-# ========== SETUP FLASK SERVER ==========
-app = Flask(__name__)
+# Pyrogram Bot Initialization
+bot = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-@app.route("/")
-def home():
-    return "Bot is running!"
+# Global Variables
+category_url = None
+scraping = False
+sending_links = False
 
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
 
-threading.Thread(target=run_flask, daemon=True).start()
-
-# ========== SETUP SELENIUM ==========
-def setup_chromedriver():
-    chromedriver_autoinstaller.install()
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    return webdriver.Chrome(options=options)
-
-# ========== FETCH HTML ==========
-def fetch_html(url):
+def extract_hubdrive_link(howblogs_url):
+    """Extract HubDrive link from howblogs.xyz"""
     try:
-        session = requests.Session()
-        session.headers.update({"User-Agent": "Mozilla/5.0"})
-        response = session.get(url, allow_redirects=True, timeout=10)
-        if response.status_code != 200:
-            print(f"⚠️ Failed to fetch {url} (Status: {response.status_code})")
-            return None
-        return BeautifulSoup(response.text, "html.parser")
-    except requests.RequestException as e:
-        print(f"❌ Error fetching {url}: {e}")
-        return None
+        response = requests.get(howblogs_url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        hubdrive_link = soup.find("a", href=True, text="Download Now")
+        if hubdrive_link:
+            return hubdrive_link["href"]
+    except Exception as e:
+        logging.error(f"Error extracting HubDrive link: {e}")
+    return None
 
-# ========== HUBDRIVE BYPASS ==========
-async def get_direct_hubdrive_link(hubdrive_url):
-    os.system("pkill -f chrome || true")  # Kill old sessions
-    wd = setup_chromedriver()
+
+def bypass_hubdrive(hubdrive_url):
+    """Bypass HubDrive to get the final download link"""
     try:
-        wd.get(hubdrive_url)
-        WebDriverWait(wd, 5).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
-        await asyncio.sleep(random.uniform(2, 3))
+        driver.get(hubdrive_url)
+        time.sleep(5)  # Wait for JavaScript execution
+        final_link = driver.find_element("xpath", "//a[contains(@href, 'https://files')]").get_attribute("href")
+        return final_link
+    except Exception as e:
+        logging.error(f"Error bypassing HubDrive: {e}")
+    return None
 
-        while True:
-            current_url = wd.current_url
-            if "hubcloud" in current_url:
-                try:
-                    download_button = WebDriverWait(wd, 10).until(
-                        EC.element_to_be_clickable((By.XPATH, "//a[@id='download']"))
-                    )
-                    wd.execute_script("arguments[0].click();", download_button)
-                    await asyncio.sleep(0.05)
-                except Exception:
-                    pass
 
-            while len(wd.window_handles) > 1:
-                wd.switch_to.window(wd.window_handles[-1])
-                await asyncio.sleep(2)
-                wd.close()
-                wd.switch_to.window(wd.window_handles[0])
+def scrape_movies():
+    """Scrape movie links from skymovieshd.video and process them"""
+    global scraping
+    if not category_url:
+        logging.warning("Category URL is not set!")
+        return
 
-            wd.back()
-            await asyncio.sleep(3)
-            if "hubcloud" not in wd.current_url:
-                try:
-                    final_buttons = wd.find_elements(By.XPATH, "//a[contains(@class, 'btn')]")
-                    final_links = [btn.get_attribute("href") for btn in final_buttons if btn.get_attribute("href")]
-                    return final_links
-                except Exception:
-                    pass
-        return []
-    finally:
-        wd.quit()
+    scraping = True
+    logging.info(f"Scraping started for {category_url}")
+    response = requests.get(category_url)
+    soup = BeautifulSoup(response.text, "html.parser")
+    posts = soup.find_all("a", class_="post-title")
 
-# ========== EXTRACT HUBDRIVE LINKS ==========
-def extract_hubdrive_links(post_url):
-    soup = fetch_html(post_url)
-    if not soup:
-        return []
+    for post in posts:
+        if not scraping:
+            break
+        post_url = post["href"]
+        logging.info(f"Processing post: {post_url}")
 
-    hubdrive_links = []
-    for link in soup.select('a[href*="howblogs.xyz"]'):
-        nsoup = fetch_html(link["href"])
-        if not nsoup:
+        # Extract howblogs link
+        post_page = requests.get(post_url)
+        post_soup = BeautifulSoup(post_page.text, "html.parser")
+        howblogs_link = post_soup.find("a", href=True, text="Download Now")
+
+        if not howblogs_link:
             continue
-        atag = nsoup.select('div[class="cotent-box"] > a[href]')
-        for link in atag:
-            if "hubdrive.dad" in link["href"]:
-                hubdrive_links.append(link["href"])
-    return hubdrive_links
 
-# ========== PROCESS CATEGORY ==========
-def process_category(category_url):
-    soup = fetch_html(category_url)
-    if not soup:
+        howblogs_url = howblogs_link["href"]
+        hubdrive_url = extract_hubdrive_link(howblogs_url)
+        if not hubdrive_url:
+            continue
+
+        final_link = bypass_hubdrive(hubdrive_url)
+        if not final_link:
+            continue
+
+        # Save to MongoDB
+        if not collection.find_one({"url": final_link}):
+            collection.insert_one({"url": final_link})
+            logging.info(f"Saved: {final_link}")
+        else:
+            logging.info("Duplicate found, skipping.")
+
+    logging.info("Scraping completed.")
+    scraping = False
+
+
+def send_links():
+    """Send saved links to the Telegram channel every 3 minutes"""
+    global sending_links
+    sending_links = True
+    while sending_links:
+        links = collection.find()
+        for link in links:
+            bot.send_message(CHANNEL_ID, link["url"])
+            time.sleep(5)  # Avoid spam
+        time.sleep(180)  # Send links every 3 minutes
+
+
+@bot.on_message(filters.command("sc_category") & filters.user(ADMIN_IDS))
+def start_scraping(client: Client, message: Message):
+    """Start scraping movies"""
+    global category_url, scraping
+    if scraping:
+        message.reply_text("Scraping is already in progress.")
         return
 
-    post_links = [a["href"] for a in soup.select('a[href*="/movie/"]')]
-    if not post_links:
+    args = message.text.split(" ", 1)
+    if len(args) < 2:
+        message.reply_text("Usage: /sc_category {category_url}")
         return
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(extract_hubdrive_links, url): url for url in post_links}
-        for future in concurrent.futures.as_completed(futures):
-            hubdrive_links = future.result()
-            for link in hubdrive_links:
-                asyncio.run(process_hubdrive_link(link))
+    category_url = args[1]
+    threading.Thread(target=scrape_movies, daemon=True).start()
+    message.reply_text("Scraping started!")
 
-# ========== PROCESS HUBDRIVE LINK ==========
-async def process_hubdrive_link(hubdrive_url):
-    if collection.find_one({"hubdrive_url": hubdrive_url}):
+
+@bot.on_message(filters.command("stop") & filters.user(ADMIN_IDS))
+def stop_sending(client: Client, message: Message):
+    """Stop sending links"""
+    global sending_links
+    sending_links = False
+    message.reply_text("Stopped sending links!")
+
+
+@bot.on_message(filters.command("restart") & filters.user(ADMIN_IDS))
+def restart_sending(client: Client, message: Message):
+    """Restart sending links"""
+    global sending_links
+    if sending_links:
+        message.reply_text("Already sending links!")
         return
+    threading.Thread(target=send_links, daemon=True).start()
+    message.reply_text("Resumed sending links!")
 
-    final_links = await get_direct_hubdrive_link(hubdrive_url)
-    if final_links:
-        collection.insert_one({"hubdrive_url": hubdrive_url, "final_links": final_links})
-        for link in final_links:
-            await bot.send_message(chat_id=CHANNEL_ID, text=link)
-
-# ========== TELEGRAM COMMANDS ==========
-async def is_admin(update: Update):
-    return update.message.from_user.id in ADMIN_IDS
-
-async def set_category(update: Update, context: CallbackContext):
-    global CATEGORY_URL
-    if update.message.from_user.id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 **Unauthorized!**")
-        return
-
-    if not context.args:
-        await update.message.reply_text("⚠️ **Usage:** `/sc_category {category_url}`")
-        return
-
-    CATEGORY_URL = context.args[0]
-    await update.message.reply_text(f"✅ **Category URL Set:** {CATEGORY_URL}")
-
-async def start_scraping(update: Update, context: CallbackContext):
-    global IS_RUNNING
-    if update.message.from_user.id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 **Unauthorized!**")
-        return
-
-    if not CATEGORY_URL:
-        await update.message.reply_text("⚠️ **No category set! Use** `/sc_category {category_url}`")
-        return
-
-    IS_RUNNING = True
-    await update.message.reply_text(f"✅ **Scraping Started:** {CATEGORY_URL}")
-    while IS_RUNNING:
-        process_category(CATEGORY_URL)
-        await asyncio.sleep(180)
-
-async def stop_scraping(update: Update, context: CallbackContext):
-    global IS_RUNNING
-    if update.message.from_user.id not in ADMIN_IDS:
-        await update.message.reply_text("🚫 **Unauthorized!**")
-        return
-
-    IS_RUNNING = False
-    await update.message.reply_text("🛑 **Scraping Stopped!**")
-
-# ========== MAIN FUNCTION ==========
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("sc_category", set_category))
-    app.add_handler(CommandHandler("start", start_scraping))
-    app.add_handler(CommandHandler("stop", stop_scraping))
-
-    print("🤖 Bot is running...")
-    app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # Start sending links every 3 minutes
+    threading.Thread(target=send_links, daemon=True).start()
+
+    # Run the bot
+    bot.run()
