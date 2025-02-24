@@ -33,7 +33,7 @@ collection = db["final_links"]
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # SOCKS5 Proxy Config
-SOCKS5_PROXY = "socks5h://115.127.124.234:1080"
+SOCKS5_PROXY = "socks5h://192.252.210.233:4145"
 
 # Requests with Proxy
 PROXIES = {
