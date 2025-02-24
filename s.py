@@ -1,172 +1,144 @@
-import logging
+import os
 import time
-import threading
+import random
+import asyncio
+import logging
 import requests
-import undetected_chromedriver as uc
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
-from pyrogram import Client, filters
-from pyrogram.types import Message
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+import chromedriver_autoinstaller
+from pyrogram import Client
 
-# Telegram Bot Config
+# Environment Variables
 API_ID = 16531092
 API_HASH = "b073b97bd4c8c56616fc2cbbd4da845a"
 BOT_TOKEN = "7524524705:AAH7aBrV5cAZNRFIx3ZZhO72kbi4tjNd8lI"
-CHANNEL_ID = "-1002340139937"  # Private channel where links are sent
+CHANNEL_ID = -1002340139937  # Private channel where links are sent
 ADMIN_IDS = [2142536515]  # Only admins can use commands
 
 # MongoDB Config
 MONGO_URI = "mongodb+srv://FF:FF@cluster0.ryymb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-DB_NAME = "MovieBot"
-COLLECTION_NAME = "Links"
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
 
 # MongoDB Connection
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client[DB_NAME]
-collection = db[COLLECTION_NAME]
+client = MongoClient(MONGO_URI)
+db = client["sky_movies"]
+collection = db["final_links"]
 
-# Initialize Selenium with undetected-chromedriver
-def init_driver():
-    return uc.Chrome(headless=True, use_subprocess=True)
+# Telegram Bot
+bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-driver = init_driver()
+# Selenium Setup
+def setup_chromedriver():
+    chromedriver_autoinstaller.install()
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    return webdriver.Chrome(options=options)
 
-# Pyrogram Bot Initialization
-bot = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# Global Variables
-category_url = None
-scraping = False
-sending_links = False
-
-
-def extract_hubdrive_link(howblogs_url):
-    """Extract HubDrive link from howblogs.xyz"""
-    try:
-        response = requests.get(howblogs_url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        hubdrive_link = soup.find("a", href=True, text="Download Now")
-        if hubdrive_link:
-            return hubdrive_link["href"]
-    except Exception as e:
-        logging.error(f"Error extracting HubDrive link: {e}")
-    return None
-
-
-def bypass_hubdrive(hubdrive_url):
-    """Bypass HubDrive to get the final download link"""
-    try:
-        driver.get(hubdrive_url)
-        time.sleep(5)  # Wait for JavaScript execution
-        final_link = driver.find_element("xpath", "//a[contains(@href, 'https://files')]").get_attribute("href")
-        return final_link
-    except Exception as e:
-        logging.error(f"Error bypassing HubDrive: {e}")
-    return None
-
-
-def scrape_movies():
-    """Scrape movie links from skymovieshd.video and process them"""
-    global scraping
-    if not category_url:
-        logging.warning("Category URL is not set!")
-        return
-
-    scraping = True
-    logging.info(f"Scraping started for {category_url}")
-    response = requests.get(category_url)
+# Extract HubDrive links
+def extract_hubdrive_links(post_url):
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0"})
+    response = session.get(post_url)
+    if response.status_code != 200:
+        return []
+    
     soup = BeautifulSoup(response.text, "html.parser")
-    posts = soup.find_all("a", class_="post-title")
+    hubdrive_links = [a["href"] for a in soup.select('a[href*="howblogs.xyz"]')]
+    
+    extracted_links = []
+    for link in hubdrive_links:
+        nsoup = BeautifulSoup(session.get(link).text, "html.parser")
+        atag = nsoup.select('div[class="cotent-box"] > a[href]')
+        for a in atag:
+            if "hubdrive.dad" in a["href"]:
+                extracted_links.append(a["href"])
+    
+    return extracted_links
 
-    for post in posts:
-        if not scraping:
-            break
-        post_url = post["href"]
-        logging.info(f"Processing post: {post_url}")
+# Bypass HubDrive using Selenium
+async def bypass_hubdrive(hubdrive_url):
+    os.system("pkill -f chrome || true") 
+    wd = setup_chromedriver()
+    try:
+        wd.get(hubdrive_url)        
+        WebDriverWait(wd, 5).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+        await asyncio.sleep(random.uniform(2, 3))
 
-        # Extract howblogs link
-        post_page = requests.get(post_url)
-        post_soup = BeautifulSoup(post_page.text, "html.parser")
-        howblogs_link = post_soup.find("a", href=True, text="Download Now")
+        while "hubdrive" in wd.current_url:
+            try:
+                download_button = WebDriverWait(wd, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//a[@id='download']"))
+                )
+                wd.execute_script("arguments[0].click();", download_button)
+                await asyncio.sleep(2)
+            except TimeoutException:
+                break
 
-        if not howblogs_link:
-            continue
+        final_links = []
+        final_buttons = wd.find_elements(By.XPATH, "//a[contains(@class, 'btn')]")
+        for btn in final_buttons:
+            if "Download" in btn.text:
+                final_links.append(btn.get_attribute("href"))
 
-        howblogs_url = howblogs_link["href"]
-        hubdrive_url = extract_hubdrive_link(howblogs_url)
-        if not hubdrive_url:
-            continue
+        return final_links
+    except Exception as e:
+        print(f"Error bypassing {hubdrive_url}: {e}")
+        return []
+    finally:
+        wd.quit()
 
-        final_link = bypass_hubdrive(hubdrive_url)
-        if not final_link:
-            continue
-
-        # Save to MongoDB
-        if not collection.find_one({"url": final_link}):
-            collection.insert_one({"url": final_link})
-            logging.info(f"Saved: {final_link}")
-        else:
-            logging.info("Duplicate found, skipping.")
-
-    logging.info("Scraping completed.")
-    scraping = False
-
-
-def send_links():
-    """Send saved links to the Telegram channel every 3 minutes"""
-    global sending_links
-    sending_links = True
-    while sending_links:
-        links = collection.find()
-        for link in links:
-            bot.send_message(CHANNEL_ID, link["url"])
-            time.sleep(5)  # Avoid spam
-        time.sleep(180)  # Send links every 3 minutes
-
-
-@bot.on_message(filters.command("sc_category") & filters.user(ADMIN_IDS))
-def start_scraping(client: Client, message: Message):
-    """Start scraping movies"""
-    global category_url, scraping
-    if scraping:
-        message.reply_text("Scraping is already in progress.")
+# Process SkyMoviesHD Category
+def process_category(category_url):
+    session = requests.Session()
+    response = session.get(category_url)
+    if response.status_code != 200:
+        print("Failed to fetch category page.")
         return
 
-    args = message.text.split(" ", 1)
-    if len(args) < 2:
-        message.reply_text("Usage: /sc_category {category_url}")
-        return
+    soup = BeautifulSoup(response.text, "html.parser")
+    post_links = [a["href"] for a in soup.select('a[href*="/movie/"]')]
 
-    category_url = args[1]
-    threading.Thread(target=scrape_movies, daemon=True).start()
-    message.reply_text("Scraping started!")
+    for idx, post_url in enumerate(post_links, start=1):
+        full_url = f"https://skymovieshd.video{post_url}" if post_url.startswith("/") else post_url
+        hubdrive_links = extract_hubdrive_links(full_url)
 
+        for hubdrive_url in hubdrive_links:
+            final_links = asyncio.run(bypass_hubdrive(hubdrive_url))
+            for link in final_links:
+                if not collection.find_one({"final_link": link}):
+                    collection.insert_one({"post_url": full_url, "final_link": link})
+                    print(f"Saved to MongoDB: {link}")
 
-@bot.on_message(filters.command("stop") & filters.user(ADMIN_IDS))
-def stop_sending(client: Client, message: Message):
-    """Stop sending links"""
-    global sending_links
-    sending_links = False
-    message.reply_text("Stopped sending links!")
+# Send Links to Telegram Every 5 Minutes
+async def send_links():
+    async with bot:
+        while True:
+            links = list(collection.find({}))
+            for doc in links:
+                final_link = doc["final_link"]
+                try:
+                    await bot.send_message(CHANNEL_ID, f"{final_link}\n\n⭐Scrape From SkyMoviesHd")
+                    collection.delete_one({"_id": doc["_id"]})
+                    print(f"Sent to Telegram: {final_link}")
+                except Exception as e:
+                    print(f"Error sending to Telegram: {e}")
+            await asyncio.sleep(300)  # Wait 5 minutes
 
-
-@bot.on_message(filters.command("restart") & filters.user(ADMIN_IDS))
-def restart_sending(client: Client, message: Message):
-    """Restart sending links"""
-    global sending_links
-    if sending_links:
-        message.reply_text("Already sending links!")
-        return
-    threading.Thread(target=send_links, daemon=True).start()
-    message.reply_text("Resumed sending links!")
-
-
+# Run Everything
 if __name__ == "__main__":
-    # Start sending links every 3 minutes
-    threading.Thread(target=send_links, daemon=True).start()
-
-    # Run the bot
-    bot.run()
+    category_url = "https://skymovieshd.video/index.php?dir=All-Web-Series&sort=all"
+    
+    # Start scraping
+    print("Scraping SkyMoviesHD...")
+    process_category(category_url)
+    
+    # Start Telegram bot
+    print("Starting Telegram bot...")
+    asyncio.run(send_links())
