@@ -5,6 +5,7 @@ import logging
 import random
 import threading
 import concurrent.futures
+from flask import Flask
 from pymongo import MongoClient
 from selenium import webdriver
 import chromedriver_autoinstaller
@@ -21,17 +22,33 @@ BOT_TOKEN = "7524524705:AAH7aBrV5cAZNRFIx3ZZhO72kbi4tjNd8lI"
 CHANNEL_ID = "-1002340139937"
 ADMIN_IDS = [2142536515]
 CATEGORY_URL = "https://skymovieshd.video/index.php?dir=All-Web-Series&sort=all"
-MONGO_URI = "mongodb+srv://FF:FF@cluster0.ryymb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"  # 🔥 তোমার MongoDB URI এখানে বসাও
+MONGO_URI = "mongodb+srv://FF:FF@cluster0.ryymb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
 IS_RUNNING = False  # বটের স্টেট
 
 # ========== DATABASE ==========
-client = MongoClient(MONGO_URI)
-db = client["movie_bot"]
-collection = db["download_links"]
+try:
+    client = MongoClient(MONGO_URI)
+    db = client["movie_bot"]
+    collection = db["download_links"]
+    print("✅ Connected to MongoDB")
+except Exception as e:
+    print(f"❌ MongoDB Connection Error: {e}")
 
 # ========== TELEGRAM BOT ==========
 bot = Bot(token=BOT_TOKEN)
+
+# ========== SETUP FLASK SERVER ==========
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
+
+threading.Thread(target=run_flask, daemon=True).start()
 
 # ========== SETUP SELENIUM ==========
 def setup_chromedriver():
@@ -48,13 +65,17 @@ def fetch_html(url):
         session = requests.Session()
         session.headers.update({"User-Agent": "Mozilla/5.0"})
         response = session.get(url, allow_redirects=False, timeout=10)
+        if response.status_code != 200:
+            print(f"⚠️ Failed to fetch {url} (Status: {response.status_code})")
+            return None
         return response.text
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print(f"❌ Error fetching {url}: {e}")
         return None
 
 # ========== HUBDRIVE BYPASS ==========
 async def get_direct_hubdrive_link(hubdrive_url):
-    os.system("pkill -f chrome || true") 
+    os.system("pkill -f chrome || true")  # Kill old sessions
     wd = setup_chromedriver()
     try:
         wd.get(hubdrive_url)
@@ -139,8 +160,7 @@ async def process_hubdrive_link(hubdrive_url):
 
 # ========== TELEGRAM COMMANDS ==========
 async def is_admin(update: Update):
-    user_id = update.message.from_user.id
-    return user_id in ADMIN_IDS
+    return update.message.from_user.id in ADMIN_IDS
 
 async def start_scraping(update: Update, context: CallbackContext):
     global CATEGORY_URL, IS_RUNNING
