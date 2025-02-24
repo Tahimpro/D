@@ -21,7 +21,7 @@ BOT_TOKEN = "7524524705:AAH7aBrV5cAZNRFIx3ZZhO72kbi4tjNd8lI"
 CHANNEL_ID = "-1002340139937"
 ADMIN_IDS = [2142536515]
 CATEGORY_URL = "https://skymovieshd.video/index.php?dir=All-Web-Series&sort=all"
-MONGO_URI = "mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority"  # 🔥 তোমার MongoDB URI এখানে বসাও
+MONGO_URI = "mongodb+srv://FF:FF@cluster0.ryymb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"  # 🔥 তোমার MongoDB URI এখানে বসাও
 
 IS_RUNNING = False  # বটের স্টেট
 
