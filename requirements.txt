@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+pymongo
+selenium
+chromedriver-autoinstaller
+python-telegram-bot
+asyncio
