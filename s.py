@@ -12,6 +12,7 @@ import chromedriver_autoinstaller
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, CallbackContext
 
@@ -21,10 +22,10 @@ API_ID = 16531092
 BOT_TOKEN = "7524524705:AAH7aBrV5cAZNRFIx3ZZhO72kbi4tjNd8lI"
 CHANNEL_ID = "-1002340139937"
 ADMIN_IDS = [2142536515]
-CATEGORY_URL = "https://skymovieshd.video/index.php?dir=All-Web-Series&sort=all"
 MONGO_URI = "mongodb+srv://FF:FF@cluster0.ryymb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
-IS_RUNNING = False  # বটের স্টেট
+IS_RUNNING = False
+CATEGORY_URL = None  # No default category, must be set via command
 
 # ========== DATABASE ==========
 try:
@@ -64,11 +65,11 @@ def fetch_html(url):
     try:
         session = requests.Session()
         session.headers.update({"User-Agent": "Mozilla/5.0"})
-        response = session.get(url, allow_redirects=False, timeout=10)
+        response = session.get(url, allow_redirects=True, timeout=10)
         if response.status_code != 200:
             print(f"⚠️ Failed to fetch {url} (Status: {response.status_code})")
             return None
-        return response.text
+        return BeautifulSoup(response.text, "html.parser")
     except requests.RequestException as e:
         print(f"❌ Error fetching {url}: {e}")
         return None
@@ -162,10 +163,27 @@ async def process_hubdrive_link(hubdrive_url):
 async def is_admin(update: Update):
     return update.message.from_user.id in ADMIN_IDS
 
-async def start_scraping(update: Update, context: CallbackContext):
-    global CATEGORY_URL, IS_RUNNING
-    if not await is_admin(update):
+async def set_category(update: Update, context: CallbackContext):
+    global CATEGORY_URL
+    if update.message.from_user.id not in ADMIN_IDS:
         await update.message.reply_text("🚫 **Unauthorized!**")
+        return
+
+    if not context.args:
+        await update.message.reply_text("⚠️ **Usage:** `/sc_category {category_url}`")
+        return
+
+    CATEGORY_URL = context.args[0]
+    await update.message.reply_text(f"✅ **Category URL Set:** {CATEGORY_URL}")
+
+async def start_scraping(update: Update, context: CallbackContext):
+    global IS_RUNNING
+    if update.message.from_user.id not in ADMIN_IDS:
+        await update.message.reply_text("🚫 **Unauthorized!**")
+        return
+
+    if not CATEGORY_URL:
+        await update.message.reply_text("⚠️ **No category set! Use** `/sc_category {category_url}`")
         return
 
     IS_RUNNING = True
@@ -176,31 +194,19 @@ async def start_scraping(update: Update, context: CallbackContext):
 
 async def stop_scraping(update: Update, context: CallbackContext):
     global IS_RUNNING
-    if not await is_admin(update):
+    if update.message.from_user.id not in ADMIN_IDS:
         await update.message.reply_text("🚫 **Unauthorized!**")
         return
 
     IS_RUNNING = False
     await update.message.reply_text("🛑 **Scraping Stopped!**")
 
-async def restart_scraping(update: Update, context: CallbackContext):
-    global IS_RUNNING
-    if not await is_admin(update):
-        await update.message.reply_text("🚫 **Unauthorized!**")
-        return
-
-    if CATEGORY_URL:
-        IS_RUNNING = True
-        await update.message.reply_text(f"🔄 **Restarting Scraping:** {CATEGORY_URL}")
-    else:
-        await update.message.reply_text("⚠️ **No category found to restart!**")
-
 # ========== MAIN FUNCTION ==========
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("sc_category", start_scraping))
+    app.add_handler(CommandHandler("sc_category", set_category))
+    app.add_handler(CommandHandler("start", start_scraping))
     app.add_handler(CommandHandler("stop", stop_scraping))
-    app.add_handler(CommandHandler("restart", restart_scraping))
 
     print("🤖 Bot is running...")
     app.run_polling()
