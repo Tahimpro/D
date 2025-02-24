@@ -5,3 +5,4 @@ selenium
 chromedriver-autoinstaller
 python-telegram-bot
 asyncio
+flask
